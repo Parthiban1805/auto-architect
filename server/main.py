@@ -1,8 +1,13 @@
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends
 from pydantic import BaseModel
 from graph import app_graph
 import time
 from fastapi.middleware.cors import CORSMiddleware 
+from sqlalchemy.orm import Session
+import models
+from database import engine, get_db, SessionLocal
+
+models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="AI Solutions Architect API", version="1.0")
 app.add_middleware(
@@ -21,7 +26,7 @@ def read_root():
     return {"status": "AI Architect Squad API is running."}
 
 @app.post("/generate-blueprint")
-async def generate_blueprint(request: BlueprintRequest):
+async def generate_blueprint(request: BlueprintRequest, db: Session = Depends(get_db)):
     if not request.transcript:
         raise HTTPException(status_code=400, detail="Transcript is required")
 
@@ -46,18 +51,29 @@ async def generate_blueprint(request: BlueprintRequest):
         execution_time = round(time.time() - start_time, 2)
         print(f"Pipeline finished in {execution_time} seconds")
 
+        result_data = {
+            "project_summary": final_state["project_summary"],
+            "missing_requirements": final_state["missing_requirements"],
+            "clarification_questions": final_state["clarification_questions"],
+            "stakeholder_feedback": final_state["stakeholder_feedback"],
+            "architecture_debate": final_state["architecture_debate"], 
+            "architecture_diagram": final_state["architecture_diagram"],
+            "sprint_backlog": final_state["sprint_backlog"]
+        }
+
+        new_run = models.ProjectRun(
+            transcript=request.transcript,
+            result_json=result_data
+        )
+        db.add(new_run)
+        db.commit()
+        db.refresh(new_run)
+
         return {
             "status": "success",
             "execution_time_seconds": execution_time,
-            "data": {
-                "project_summary": final_state["project_summary"],
-                "missing_requirements": final_state["missing_requirements"],
-                "clarification_questions": final_state["clarification_questions"],
-                "stakeholder_feedback": final_state["stakeholder_feedback"],
-                "architecture_debate": final_state["architecture_debate"], 
-                "architecture_diagram": final_state["architecture_diagram"],
-                "sprint_backlog": final_state["sprint_backlog"]
-            }
+            "project_id": new_run.id,
+            "data": result_data
         }
     except Exception as e:
         print(f"Error during graph execution: {e}")
@@ -155,18 +171,34 @@ async def websocket_generate_blueprint(websocket: WebSocket):
             execution_time = round(time.time() - start_time, 2)
             print(f"[WS] Pipeline finished in {execution_time} seconds")
             
+            result_data = {
+                "project_summary": state["project_summary"],
+                "missing_requirements": state["missing_requirements"],
+                "clarification_questions": state["clarification_questions"],
+                "stakeholder_feedback": state["stakeholder_feedback"],
+                "architecture_debate": state["architecture_debate"], 
+                "architecture_diagram": state["architecture_diagram"],
+                "sprint_backlog": state["sprint_backlog"]
+            }
+
+            db = SessionLocal()
+            try:
+                new_run = models.ProjectRun(
+                    transcript=transcript,
+                    result_json=result_data
+                )
+                db.add(new_run)
+                db.commit()
+                db.refresh(new_run)
+                project_id = new_run.id
+            finally:
+                db.close()
+
             await websocket.send_json({
                 "type": "result",
                 "execution_time_seconds": execution_time,
-                "data": {
-                    "project_summary": state["project_summary"],
-                    "missing_requirements": state["missing_requirements"],
-                    "clarification_questions": state["clarification_questions"],
-                    "stakeholder_feedback": state["stakeholder_feedback"],
-                    "architecture_debate": state["architecture_debate"], 
-                    "architecture_diagram": state["architecture_diagram"],
-                    "sprint_backlog": state["sprint_backlog"]
-                }
+                "project_id": project_id,
+                "data": result_data
             })
         else:
             await websocket.send_json({"type": "error", "message": "Invalid client action received."})
@@ -184,6 +216,23 @@ async def websocket_generate_blueprint(websocket: WebSocket):
             await websocket.close()
         except Exception:
             pass
+
+@app.get("/projects")
+def get_projects(db: Session = Depends(get_db)):
+    projects = db.query(models.ProjectRun).order_by(models.ProjectRun.created_at.desc()).all()
+    return [{"id": p.id, "created_at": p.created_at, "transcript_snippet": p.transcript[:100] + "..."} for p in projects]
+
+@app.get("/projects/{project_id}")
+def get_project(project_id: int, db: Session = Depends(get_db)):
+    project = db.query(models.ProjectRun).filter(models.ProjectRun.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {
+        "id": project.id,
+        "created_at": project.created_at,
+        "transcript": project.transcript,
+        "data": project.result_json
+    }
 
 if __name__ == "__main__":
     import uvicorn

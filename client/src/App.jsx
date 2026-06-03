@@ -4,6 +4,7 @@ import { Button } from './components/ui/Button';
 import { Card, CardHeader, CardTitle, CardContent } from './components/ui/Card';
 import { Badge } from './components/ui/Badge';
 import { Textarea } from './components/ui/Textarea';
+import { Sidebar } from './components/Sidebar';
 
 function App() {
   const [transcript, setTranscript] = useState("Client: Hi, we want to build an Uber for dog walkers. Users should be able to see dog walkers on a map and book them.\nDeveloper: Okay, do we need an app or a website?\nClient: Definitely a mobile app, iOS and Android.\nDeveloper: How will payments be handled?\nClient: Oh, I haven't thought about that. Maybe credit cards?\nDeveloper: Okay, we'll look into Stripe. What about background checks for walkers?\nClient: Yes, we need a verified badge, but let's do that manually for now. We want to launch in 3 months.");
@@ -17,6 +18,7 @@ function App() {
   const [isReviewing, setIsReviewing] = useState(false);
   const [editableRequirements, setEditableRequirements] = useState([]);
   const [editableQuestions, setEditableQuestions] = useState([]);
+  const [selectedProjectId, setSelectedProjectId] = useState(null);
 
   const generateBlueprint = () => {
     setLoading(true);
@@ -47,8 +49,12 @@ function App() {
             execution_time_seconds: payload.execution_time_seconds,
             data: payload.data
           });
+          if (payload.project_id) {
+            setSelectedProjectId(payload.project_id);
+          }
           setLoading(false);
           ws.close();
+          window.dispatchEvent(new Event('refreshProjects'));
         } else if (payload.type === "error") {
           setError(payload.message);
           setLoading(false);
@@ -86,6 +92,39 @@ function App() {
       missing_requirements: editableRequirements.filter(r => r.trim() !== ""),
       clarification_questions: editableQuestions.filter(q => q.trim() !== "")
     }));
+  };
+
+  const loadProject = async (id) => {
+    setLoading(true);
+    setError(null);
+    setIsReviewing(false);
+    if (socket) socket.close();
+    
+    try {
+      const response = await fetch(`http://localhost:8000/projects/${id}`);
+      if (!response.ok) throw new Error('Failed to load project');
+      const data = await response.json();
+      
+      setTranscript(data.transcript);
+      setResult({
+        execution_time_seconds: 'Saved',
+        data: data.data
+      });
+      setSelectedProjectId(data.id);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const startNewProject = () => {
+    setTranscript("");
+    setResult(null);
+    setError(null);
+    setSelectedProjectId(null);
+    setIsReviewing(false);
+    if (socket) socket.close();
   };
 
   const addRequirement = () => {
@@ -173,10 +212,17 @@ ${backlogMarkdown}
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans p-4 md:p-8 selection:bg-brand-100 selection:text-brand-900">
-      <div className="max-w-7xl mx-auto space-y-8 animate-fade-in-up">
-        
-        {/* Header */}
+    <div className="flex h-screen overflow-hidden bg-slate-50 text-slate-900 font-sans selection:bg-brand-100 selection:text-brand-900">
+      <Sidebar 
+        onSelectProject={loadProject} 
+        selectedProjectId={selectedProjectId} 
+        onNewProject={startNewProject}
+      />
+      
+      <div className="flex-1 overflow-y-auto p-4 md:p-8">
+        <div className="max-w-7xl mx-auto space-y-8 animate-fade-in-up pb-12">
+          
+          {/* Header */}
         <header className="text-center space-y-4 py-8">
           <div className="inline-flex items-center justify-center p-3 bg-brand-100 rounded-2xl mb-4 shadow-sm text-brand-600">
             <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
@@ -575,6 +621,7 @@ ${backlogMarkdown}
                 )}
               </div>
             )}
+          </div>
           </div>
         </div>
       </div>
