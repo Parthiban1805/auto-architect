@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import axios from 'axios';
 import MermaidViewer from './MermaidViewer';
 import { Button } from './components/ui/Button';
 import { Card, CardHeader, CardTitle, CardContent } from './components/ui/Card';
@@ -11,22 +10,108 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const [streamStatus, setStreamStatus] = useState("");
 
-  const generateBlueprint = async () => {
+  const generateBlueprint = () => {
     setLoading(true);
     setError(null);
     setResult(null);
+    setStreamStatus("Waking up architect agents...");
 
-    try {
-      const response = await axios.post('http://localhost:8000/generate-blueprint', {
-        transcript: transcript
-      });
-      setResult(response.data);
-    } catch (err) {
-      setError(err.response?.data?.detail || "Failed to connect to backend");
-    } finally {
+    const ws = new WebSocket("ws://localhost:8000/ws/generate-blueprint");
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ transcript: transcript }));
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        if (payload.type === "status") {
+          setStreamStatus(payload.message);
+        } else if (payload.type === "result") {
+          setResult({
+            execution_time_seconds: payload.execution_time_seconds,
+            data: payload.data
+          });
+          setLoading(false);
+          ws.close();
+        } else if (payload.type === "error") {
+          setError(payload.message);
+          setLoading(false);
+          ws.close();
+        }
+      } catch (err) {
+        setError("Error reading updates from server.");
+        setLoading(false);
+        ws.close();
+      }
+    };
+
+    ws.onerror = () => {
+      setError("Failed to connect to backend WebSocket server.");
       setLoading(false);
+    };
+
+    ws.onclose = () => {
+      setLoading(false);
+    };
+  };
+
+  const exportToMarkdown = () => {
+    if (!result) return;
+    
+    const { data, execution_time_seconds } = result;
+    
+    let backlogMarkdown = "";
+    if (data.sprint_backlog?.epics) {
+      data.sprint_backlog.epics.forEach((epic, epicIndex) => {
+        backlogMarkdown += `### EPIC ${epicIndex + 1}: ${epic.epic_name}\n\n`;
+        epic.stories.forEach((story) => {
+          backlogMarkdown += `- **${story.title}** (${story.story_points} pts)\n  *"${story.description}"*\n\n`;
+        });
+      });
     }
+
+    const mdContent = `# AI Solutions Architect Blueprint
+Generated in ${execution_time_seconds}s
+
+## 1. Project Summary Document
+${data.project_summary}
+
+## 2. Missing Requirements
+${data.missing_requirements.map(req => `- ${req}`).join('\n')}
+
+## 3. Clarification Questions
+${data.clarification_questions.map(q => `- ${q}`).join('\n')}
+
+## 4. Architectural Debate & Decision
+${data.architecture_debate}
+
+## 5. System Architecture (Mermaid)
+\`\`\`mermaid
+${data.architecture_diagram}
+\`\`\`
+
+## 6. Stakeholder Critiques (Proxy Board)
+${data.stakeholder_feedback}
+
+## 7. Agile Sprint Backlog
+${backlogMarkdown}
+`;
+
+    const blob = new Blob([mdContent], { type: "text/markdown;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", `blueprint_${Date.now()}.md`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const exportToPDF = () => {
+    window.print();
   };
 
   return (
@@ -93,8 +178,22 @@ function App() {
             {result ? (
               <div className="space-y-8 animate-fade-in-up">
                 
-                {/* Time Badge */}
-                <div className="flex justify-end">
+                {/* Time Badge and Export Options */}
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                  <div className="flex gap-2">
+                    <Button variant="secondary" onClick={exportToMarkdown}>
+                      <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                      </svg>
+                      Export Markdown
+                    </Button>
+                    <Button variant="secondary" onClick={exportToPDF}>
+                      <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path>
+                      </svg>
+                      Export PDF / Print
+                    </Button>
+                  </div>
                   <Badge variant="success" className="shadow-sm">
                     <svg className="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
@@ -164,6 +263,25 @@ function App() {
                     </CardContent>
                   </Card>
                 </div>
+
+                {/* Section 2.5: Architectural Debate */}
+                {result.data.architecture_debate && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>
+                        <svg className="w-5 h-5 mr-2 text-brand-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path>
+                        </svg>
+                        Architectural Debate & Decision
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="prose prose-slate prose-sm md:prose-base max-w-none whitespace-pre-wrap">
+                        {result.data.architecture_debate}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
 
                 {/* Section 3: Architecture Diagram */}
                 <Card>
@@ -260,8 +378,8 @@ function App() {
                         </svg>
                       </div>
                     </div>
-                    <div className="text-lg font-medium text-slate-700">Agents are debating architecture...</div>
-                    <p className="text-sm text-slate-500 mt-2">This usually takes about 5-10 seconds.</p>
+                    <div className="text-lg font-medium text-slate-700">{streamStatus}</div>
+                    <p className="text-sm text-slate-500 mt-2">The architect board is building your blueprint in real time.</p>
                   </>
                 ) : (
                   <>

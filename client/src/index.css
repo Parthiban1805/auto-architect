@@ -40,3 +40,67 @@
     to { opacity: 1; transform: translateY(0); }
   }
 }
+
+@media print {
+  /* Hide interactive/editing areas, headers, and inputs */
+  header,
+  .lg\:col-span-4,
+  button,
+  details,
+  .flex.justify-end {
+    display: none !important;
+  }
+
+  /* Make layout full width and style for paper print */
+  body {
+    background: white !important;
+    color: #1e293b !important;
+    font-size: 11pt !important;
+  }
+  
+  .lg\:col-span-8 {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .max-w-7xl {
+    max-width: 100% !important;
+    padding: 0 !important;
+  }
+
+  /* Simplify Cards for paper format: no shadows, avoid awkward breaks */
+  div[class*="bg-white"],
+  div[class*="bg-slate-900"],
+  div[class*="bg-slate-50"],
+  div[class*="bg-amber-50"],
+  div[class*="bg-brand-50"] {
+    background: white !important;
+    color: #1e293b !important;
+    box-shadow: none !important;
+    border: 1px solid #e2e8f0 !important;
+    page-break-inside: avoid;
+    margin-bottom: 24px !important;
+  }
+
+  /* Force dark cards to print with readable dark text */
+  .text-white, .text-slate-300, .text-slate-100, .text-brand-950, .text-slate-800 {
+    color: #1e293b !important;
+  }
+
+  /* Reset border colors */
+  .border, [class*="border-"] {
+    border-color: #e2e8f0 !important;
+  }
+
+  /* Optimize text wrapping & headers */
+  h1, h2, h3, h4 {
+    page-break-after: avoid;
+    color: #0f172a !important;
+  }
+
+  li, tr, p {
+    page-break-inside: avoid;
+  }
+}
