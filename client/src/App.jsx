@@ -11,14 +11,22 @@ function App() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [streamStatus, setStreamStatus] = useState("");
+  
+  // Human-in-the-Loop State Variables
+  const [socket, setSocket] = useState(null);
+  const [isReviewing, setIsReviewing] = useState(false);
+  const [editableRequirements, setEditableRequirements] = useState([]);
+  const [editableQuestions, setEditableQuestions] = useState([]);
 
   const generateBlueprint = () => {
     setLoading(true);
     setError(null);
     setResult(null);
+    setIsReviewing(false);
     setStreamStatus("Waking up architect agents...");
 
     const ws = new WebSocket("ws://localhost:8000/ws/generate-blueprint");
+    setSocket(ws);
 
     ws.onopen = () => {
       ws.send(JSON.stringify({ transcript: transcript }));
@@ -29,6 +37,11 @@ function App() {
         const payload = JSON.parse(event.data);
         if (payload.type === "status") {
           setStreamStatus(payload.message);
+        } else if (payload.type === "interrupt") {
+          setEditableRequirements(payload.data.missing_requirements || []);
+          setEditableQuestions(payload.data.clarification_questions || []);
+          setIsReviewing(true);
+          setLoading(false);
         } else if (payload.type === "result") {
           setResult({
             execution_time_seconds: payload.execution_time_seconds,
@@ -54,8 +67,53 @@ function App() {
     };
 
     ws.onclose = () => {
-      setLoading(false);
+      // Don't disable loading if we transitioned to reviewing
+      if (!ws.onmessage) {
+        setLoading(false);
+      }
     };
+  };
+
+  const approveAndContinue = () => {
+    if (!socket) return;
+    
+    setLoading(true);
+    setIsReviewing(false);
+    setStreamStatus("Agent 3: Gathering Stakeholder Critiques...");
+    
+    socket.send(JSON.stringify({
+      action: "continue",
+      missing_requirements: editableRequirements.filter(r => r.trim() !== ""),
+      clarification_questions: editableQuestions.filter(q => q.trim() !== "")
+    }));
+  };
+
+  const addRequirement = () => {
+    setEditableRequirements([...editableRequirements, ""]);
+  };
+
+  const updateRequirement = (index, value) => {
+    const updated = [...editableRequirements];
+    updated[index] = value;
+    setEditableRequirements(updated);
+  };
+
+  const removeRequirement = (index) => {
+    setEditableRequirements(editableRequirements.filter((_, i) => i !== index));
+  };
+
+  const addQuestion = () => {
+    setEditableQuestions([...editableQuestions, ""]);
+  };
+
+  const updateQuestion = (index, value) => {
+    const updated = [...editableQuestions];
+    updated[index] = value;
+    setEditableQuestions(updated);
+  };
+
+  const removeQuestion = (index) => {
+    setEditableQuestions(editableQuestions.filter((_, i) => i !== index));
   };
 
   const exportToMarkdown = () => {
@@ -152,10 +210,11 @@ ${backlogMarkdown}
                   value={transcript}
                   onChange={(e) => setTranscript(e.target.value)}
                   placeholder="Paste Zoom transcript or meeting notes here..."
+                  disabled={loading || isReviewing}
                 />
                 <Button
                   onClick={generateBlueprint}
-                  disabled={loading || !transcript}
+                  disabled={loading || isReviewing || !transcript}
                   loading={loading}
                   className="w-full py-3 shadow-md shadow-brand-500/20 text-base"
                 >
@@ -175,7 +234,127 @@ ${backlogMarkdown}
 
           {/* Right Column: Output */}
           <div className="lg:col-span-8 space-y-8">
-            {result ? (
+            {isReviewing ? (
+              <Card className="border-brand-200 bg-brand-50/10 animate-fade-in-up shadow-lg">
+                <CardHeader className="bg-brand-50 border-brand-200/50">
+                  <div className="flex justify-between items-center w-full">
+                    <CardTitle className="text-brand-950 text-xl font-bold flex items-center">
+                      <span className="bg-brand-500 text-white text-xs px-2.5 py-1 rounded-lg mr-3 shadow-sm font-semibold">STAGE 2.5</span>
+                      Human-in-the-Loop Review
+                    </CardTitle>
+                    <Badge variant="warning">Awaiting Approval</Badge>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  <p className="text-sm text-slate-600">
+                    The requirements engine has finished analyzing your transcript. Please review, edit, add, or remove requirements and clarification questions below before continuing to debate architectures and building the backlog.
+                  </p>
+
+                  <div className="space-y-4">
+                    <h3 className="font-bold text-slate-800 text-sm flex items-center justify-between border-b pb-2">
+                      <span className="flex items-center">
+                        <svg className="w-4 h-4 mr-2 text-brand-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
+                        </svg>
+                        Missing Requirements
+                      </span>
+                      <Button variant="ghost" className="text-brand-600 hover:text-brand-700 py-1 px-2 h-7 text-xs border border-brand-100 hover:bg-brand-50" onClick={addRequirement}>
+                        + Add Requirement
+                      </Button>
+                    </h3>
+                    
+                    <div className="space-y-3">
+                      {editableRequirements.map((req, i) => (
+                        <div key={i} className="flex gap-2 items-center animate-fade-in-up">
+                          <input
+                            type="text"
+                            value={req}
+                            onChange={(e) => updateRequirement(i, e.target.value)}
+                            placeholder="Enter requirement..."
+                            className="flex-grow p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-brand-500 focus:outline-none text-sm text-slate-700 bg-white"
+                          />
+                          <button
+                            onClick={() => removeRequirement(i)}
+                            className="p-3 text-red-500 hover:bg-red-50 rounded-lg transition-colors border border-transparent hover:border-red-200"
+                            title="Delete"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                            </svg>
+                          </button>
+                        </div>
+                      ))}
+                      {editableRequirements.length === 0 && (
+                        <p className="text-slate-400 text-xs italic py-2">No requirements listed. Click '+ Add Requirement' to add one.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <h3 className="font-bold text-slate-800 text-sm flex items-center justify-between border-b pb-2">
+                      <span className="flex items-center">
+                        <svg className="w-4 h-4 mr-2 text-brand-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                        Clarification Questions
+                      </span>
+                      <Button variant="ghost" className="text-brand-600 hover:text-brand-700 py-1 px-2 h-7 text-xs border border-brand-100 hover:bg-brand-50" onClick={addQuestion}>
+                        + Add Question
+                      </Button>
+                    </h3>
+                    
+                    <div className="space-y-3">
+                      {editableQuestions.map((q, i) => (
+                        <div key={i} className="flex gap-2 items-center animate-fade-in-up">
+                          <input
+                            type="text"
+                            value={q}
+                            onChange={(e) => updateQuestion(i, e.target.value)}
+                            placeholder="Enter clarification question..."
+                            className="flex-grow p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-brand-500 focus:outline-none text-sm text-slate-700 bg-white"
+                          />
+                          <button
+                            onClick={() => removeQuestion(i)}
+                            className="p-3 text-red-500 hover:bg-red-50 rounded-lg transition-colors border border-transparent hover:border-red-200"
+                            title="Delete"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                            </svg>
+                          </button>
+                        </div>
+                      ))}
+                      {editableQuestions.length === 0 && (
+                        <p className="text-slate-400 text-xs italic py-2">No clarification questions listed. Click '+ Add Question' to add one.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="pt-4 border-t flex justify-end gap-3">
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        if (socket) socket.close();
+                        setIsReviewing(false);
+                        setLoading(false);
+                      }}
+                    >
+                      Cancel Run
+                    </Button>
+                    <Button
+                      variant="primary"
+                      onClick={approveAndContinue}
+                      className="px-6 py-2.5 shadow-md shadow-brand-500/20"
+                    >
+                      Approve & Continue
+                      <svg className="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path>
+                      </svg>
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : result ? (
               <div className="space-y-8 animate-fade-in-up">
                 
                 {/* Time Badge and Export Options */}
@@ -227,7 +406,7 @@ ${backlogMarkdown}
                         <svg className="w-5 h-5 mr-2 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
                         </svg>
-                        Missing Requirements
+                        Missing Requirements (Human Approved)
                       </CardTitle>
                     </CardHeader>
                     <CardContent>
@@ -248,7 +427,7 @@ ${backlogMarkdown}
                         <svg className="w-5 h-5 mr-2 text-brand-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                         </svg>
-                        Clarification Questions
+                        Clarification Questions (Human Approved)
                       </CardTitle>
                     </CardHeader>
                     <CardContent>

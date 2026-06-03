@@ -5,6 +5,7 @@ from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.pydantic_v1 import BaseModel, Field
 from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.memory import MemorySaver
 
 load_dotenv()
 
@@ -148,4 +149,5 @@ workflow.add_edge("enterprise_arch", "moderator")
 workflow.add_edge("moderator", "sprint")
 workflow.add_edge("sprint", END)
 
-app_graph = workflow.compile()
+memory_saver = MemorySaver()
+app_graph = workflow.compile(checkpointer=memory_saver, interrupt_after=["gap"])
