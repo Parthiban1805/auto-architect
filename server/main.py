@@ -67,6 +67,7 @@ async def generate_blueprint(request: BlueprintRequest):
 async def websocket_generate_blueprint(websocket: WebSocket):
     await websocket.accept()
     try:
+        import uuid
         data = await websocket.receive_json()
         transcript = data.get("transcript")
         if not transcript:
@@ -75,6 +76,9 @@ async def websocket_generate_blueprint(websocket: WebSocket):
             return
             
         print(f"[WS] Received transcript of length: {len(transcript)} characters")
+        
+        thread_id = str(uuid.uuid4())
+        config = {"configurable": {"thread_id": thread_id}}
         
         await websocket.send_json({"type": "status", "message": "Agent 1: Reading & Summarizing Transcript..."})
         
@@ -94,39 +98,78 @@ async def websocket_generate_blueprint(websocket: WebSocket):
         start_time = time.time()
         state = initial_state.copy()
         
-        async for chunk in app_graph.astream(initial_state):
+        # 1. Run up to the interrupt after "gap" node
+        async for chunk in app_graph.astream(initial_state, config):
             for node_name, values in chunk.items():
                 print(f"[WS] Completed node: {node_name}")
                 state.update(values)
                 if node_name == "memory":
                     await websocket.send_json({"type": "status", "message": "Agent 2: Analyzing Requirements & Gaps..."})
                 elif node_name == "gap":
-                    await websocket.send_json({"type": "status", "message": "Agent 3: Gathering Stakeholder Critiques..."})
-                elif node_name == "stakeholder":
-                    await websocket.send_json({"type": "status", "message": "Agent 4: Generating Startup MVP Architecture..."})
-                elif node_name == "startup_cto":
-                    await websocket.send_json({"type": "status", "message": "Agent 5: Designing Enterprise Scalability..."})
-                elif node_name == "enterprise_arch":
-                    await websocket.send_json({"type": "status", "message": "Agent 6: Moderating Debate & Generating Diagram..."})
-                elif node_name == "moderator":
-                    await websocket.send_json({"type": "status", "message": "Agent 7: Creating Sprint Planning & Backlog..."})
+                    # Paused at checkpoint interrupt after gap node completes
+                    pass
         
-        execution_time = round(time.time() - start_time, 2)
-        print(f"[WS] Pipeline finished in {execution_time} seconds")
-        
+        # 2. Send intermediate draft results for Human-in-the-Loop review
         await websocket.send_json({
-            "type": "result",
-            "execution_time_seconds": execution_time,
+            "type": "interrupt",
+            "thread_id": thread_id,
             "data": {
                 "project_summary": state["project_summary"],
                 "missing_requirements": state["missing_requirements"],
-                "clarification_questions": state["clarification_questions"],
-                "stakeholder_feedback": state["stakeholder_feedback"],
-                "architecture_debate": state["architecture_debate"], 
-                "architecture_diagram": state["architecture_diagram"],
-                "sprint_backlog": state["sprint_backlog"]
+                "clarification_questions": state["clarification_questions"]
             }
         })
+        
+        # 3. Await edits from user
+        client_response = await websocket.receive_json()
+        if client_response.get("action") == "continue":
+            edited_requirements = client_response.get("missing_requirements", [])
+            edited_questions = client_response.get("clarification_questions", [])
+            
+            # Update state with human edits
+            app_graph.update_state(config, {
+                "missing_requirements": edited_requirements,
+                "clarification_questions": edited_questions
+            })
+            
+            # Sync local state variable
+            state["missing_requirements"] = edited_requirements
+            state["clarification_questions"] = edited_questions
+            
+            await websocket.send_json({"type": "status", "message": "Agent 3: Gathering Stakeholder Critiques..."})
+            
+            # 4. Resume execution (passing None tells it to resume from checkpointer)
+            async for chunk in app_graph.astream(None, config):
+                for node_name, values in chunk.items():
+                    print(f"[WS] Completed node: {node_name}")
+                    state.update(values)
+                    if node_name == "stakeholder":
+                        await websocket.send_json({"type": "status", "message": "Agent 4: Generating Startup MVP Architecture..."})
+                    elif node_name == "startup_cto":
+                        await websocket.send_json({"type": "status", "message": "Agent 5: Designing Enterprise Scalability..."})
+                    elif node_name == "enterprise_arch":
+                        await websocket.send_json({"type": "status", "message": "Agent 6: Moderating Debate & Generating Diagram..."})
+                    elif node_name == "moderator":
+                        await websocket.send_json({"type": "status", "message": "Agent 7: Creating Sprint Planning & Backlog..."})
+            
+            execution_time = round(time.time() - start_time, 2)
+            print(f"[WS] Pipeline finished in {execution_time} seconds")
+            
+            await websocket.send_json({
+                "type": "result",
+                "execution_time_seconds": execution_time,
+                "data": {
+                    "project_summary": state["project_summary"],
+                    "missing_requirements": state["missing_requirements"],
+                    "clarification_questions": state["clarification_questions"],
+                    "stakeholder_feedback": state["stakeholder_feedback"],
+                    "architecture_debate": state["architecture_debate"], 
+                    "architecture_diagram": state["architecture_diagram"],
+                    "sprint_backlog": state["sprint_backlog"]
+                }
+            })
+        else:
+            await websocket.send_json({"type": "error", "message": "Invalid client action received."})
         
     except WebSocketDisconnect:
         print("[WS] Client disconnected")
